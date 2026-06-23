@@ -47,8 +47,8 @@ private:
   std::stack<int> peg2_stack;
   std::stack<int> peg3_stack;
 
-  int disk_thickness;
-  int peg_height;
+  double disk_thickness;
+  double peg_height;
 
   // Peg positions
   geometry_msgs::msg::Pose peg1_pose;
@@ -62,7 +62,7 @@ HanoiTaskNode::HanoiTaskNode(const rclcpp::NodeOptions& options)
 {
 
   // Disk thickness
-  disk_thickness = 0.02;
+  disk_thickness = 0.025;
   peg_height = 0.15;
 
   // Initialize peg positions
@@ -169,6 +169,8 @@ void HanoiTaskNode::setupPlanningScene(int num_disks)
     "disk2",
     "package://moveit_hanoi/meshes/disk2.stl",
     disk2_pose);
+  
+
   
   std::vector<moveit_msgs::msg::CollisionObject> objects;
   objects.push_back(peg1);
@@ -432,10 +434,135 @@ mtc::Task HanoiTaskNode::createTask(int disk, int source_peg, int target_peg)
   }
   // Place
   {
-
-
+    auto stage_move_to_place = std::make_unique<mtc::stages::Connect>(
+      "move_to_place",
+      mtc::stages::Connect::GroupPlannerVector{ { arm_group_name, sampling_planner },
+                                                { hand_group_name, interpolation_planner} });
+    stage_move_to_place->setTimeout(10.0);
+    stage_move_to_place->properties().configureInitFrom(mtc::Stage::PARENT);
+    task.add(std::move(stage_move_to_place));
   }
+  {
+    auto place = std::make_unique<mtc::SerialContainer>("place object");
+    task.properties().exposeTo(place->properties(), { "eef", "group", "ik_frame" });
+    place->properties().configureInitFrom(mtc::Stage::PARENT,
+                                          { "eef", "group", "ik_frame" });
 
+    {
+      // Get place pose
+      auto stage = std::make_unique<mtc::stages::GeneratePlacePose>("generate place pose");
+      stage->properties().configureInitFrom(mtc::Stage::PARENT);
+      stage->properties().set("marker_ns", "place_pose");
+      stage->setObject(diskName);
+
+      geometry_msgs::msg::PoseStamped target_pose_msg;
+      target_pose_msg.header.frame_id = "world";
+      
+      switch (target_peg)
+      {
+        case 1: target_pose_msg.pose = peg1_pose; break;
+        case 2: target_pose_msg.pose = peg2_pose; break;
+        case 3: target_pose_msg.pose = peg3_pose; break;
+        default: RCLCPP_ERROR(LOGGER, "Unexpected target peg %d", target_peg);
+      }
+
+      target_pose_msg.pose.position.z += (peg_height/2 + 0.1);
+      stage->setPose(target_pose_msg);
+      stage->setMonitoredStage(attach_object_stage);
+
+      // Compute IK
+      auto wrapper =
+        std::make_unique<mtc::stages::ComputeIK>("place pose IK", std::move(stage));
+      wrapper->setMaxIKSolutions(8);
+      wrapper->setMinSolutionDistance(1.0);
+      wrapper->setIKFrame(diskName);
+      wrapper->properties().configureInitFrom(mtc::Stage::PARENT, { "eef", "group" });
+      wrapper->properties().configureInitFrom(mtc::Stage::INTERFACE, { "target_pose" });
+      place->insert(std::move(wrapper));
+    }
+    {
+      auto stage =
+        std::make_unique<mtc::stages::ModifyPlanningScene>("allow place collisions");
+      auto hand_links =
+        task.getRobotModel()
+          ->getJointModelGroup(hand_group_name)
+          ->getLinkModelNamesWithCollisionGeometry();
+
+      std::string target_peg_name = "peg" + std::to_string(target_peg);
+
+      stage->allowCollisions(target_peg_name, hand_links, true);
+      stage->allowCollisions(diskName, hand_links, true);
+      // stage->allowCollisions("peg1", hand_links, true);
+      
+      place->insert(std::move(stage));
+    }
+    {
+      auto stage = std::make_unique<mtc::stages::MoveRelative>("lower object", cartesian_planner);
+      stage->properties().configureInitFrom(mtc::Stage::PARENT, { "group" });
+      
+      // Get current height of stack on target peg
+
+      int target_peg_length = -1;
+      double lower_height{};
+      switch(target_peg)
+      {
+        case 1: target_peg_length = peg1_stack.size(); break;
+        case 2: target_peg_length = peg2_stack.size(); break;
+        case 3: target_peg_length = peg3_stack.size(); break;
+      }
+      if (target_peg_length != -1) {
+        lower_height = peg_height + 0.1 - (disk_thickness/2 + target_peg_length*disk_thickness);
+      }
+      else {
+        RCLCPP_ERROR(LOGGER, "Cant find target peg length.");
+      }
+      
+      stage->setMinMaxDistance(lower_height, lower_height);
+      stage->setIKFrame(hand_frame);
+      stage->properties().set("marker_ns", "lower_object");
+
+      // Set upward direction
+      geometry_msgs::msg::Vector3Stamped vec;
+      vec.header.frame_id = "world";
+      vec.vector.z = -1.0;
+      stage->setDirection(vec);
+      place->insert(std::move(stage));
+
+    }
+    {
+      auto stage = std::make_unique<mtc::stages::MoveTo>("open hand", interpolation_planner);
+      stage->setGroup(hand_group_name);
+      stage->setGoal("open");
+      place->insert(std::move(stage));
+    }
+    {
+      std::string target_peg_name = "peg" + std::to_string(target_peg);
+      auto stage =
+          std::make_unique<mtc::stages::ModifyPlanningScene>("forbid collision (hand,object)");
+      auto hand_links = task.getRobotModel()
+                        ->getJointModelGroup(hand_group_name)
+                        ->getLinkModelNamesWithCollisionGeometry();
+      stage->allowCollisions(diskName, hand_links, false);
+      stage->allowCollisions(target_peg_name, hand_links, false);
+      place->insert(std::move(stage));
+    }
+    {
+      auto stage = std::make_unique<mtc::stages::ModifyPlanningScene>("detach object");
+      stage->detachObject(diskName, hand_frame);
+      place->insert(std::move(stage));
+    }
+
+    task.add(std::move(place));
+  } 
+  
+  {
+    // Go home
+    auto stage = std::make_unique<mtc::stages::MoveTo>("go home", sampling_planner);
+    stage->setGroup(arm_group_name);
+    stage->setGoal("ready");
+    task.add(std::move(stage));
+  }
+  
   return task;
 
 }
