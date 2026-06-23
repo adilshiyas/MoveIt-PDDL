@@ -28,15 +28,15 @@ def create_ring(outer_radius, inner_radius, height, filename):
 
 if __name__=="__main__":
     create_ring(
-        outer_radius=0.05,
+        outer_radius=0.035,
         inner_radius=0.02,
-        height=0.02,
+        height=0.025,
         filename=str(MESH_DIR / "disk1.stl")
     )
     create_ring(
-        outer_radius=0.04,
+        outer_radius=0.025,
         inner_radius=0.02,
-        height=0.02,
+        height=0.025,
         filename=str(MESH_DIR / "disk2.stl")
     )
     

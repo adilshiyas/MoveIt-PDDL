@@ -17,6 +17,11 @@
 static const rclcpp::Logger LOGGER = rclcpp::get_logger("moveit_hanoi");
 namespace mtc = moveit::task_constructor;
 
+struct taskInfo
+{
+  bool isTaskValid;
+  int sourcePeg;
+};
 
 class HanoiTaskNode
 {
@@ -30,10 +35,11 @@ public:
   // );
   bool doTask(int disk, int target_peg);
   void setupPlanningScene(int num_disks);
-  bool isValidMove(int disk, int target_peg);
+  //bool isValidMove(int disk, int target_peg);
+  taskInfo isValidMove(int disk, int target_peg);
 
 private:
-  mtc::Task createTask(int disk, int target_peg);
+  mtc::Task createTask(int disk, int source_peg, int target_peg);
   mtc::Task task_;
   rclcpp::Node::SharedPtr node_;
 
@@ -136,24 +142,23 @@ void HanoiTaskNode::setupPlanningScene(int num_disks)
   peg3.pose = peg3_pose;
 
   moveit::planning_interface::PlanningSceneInterface psi;
-  psi.applyCollisionObject(peg1);
-  psi.applyCollisionObject(peg2);
-  psi.applyCollisionObject(peg3);
 
   // Disk 1 and 2
   // Add support for more disks later
 
   geometry_msgs::msg::Pose disk1_pose;
-  disk1_pose.position.x = 0.5;
-  disk1_pose.position.y = -0.2;
+  disk1_pose = peg1_pose;
+  // disk1_pose.position.x = 0.5;
+  // disk1_pose.position.y = -0.2;
   disk1_pose.position.z = 0.01;
-  disk1_pose.orientation.w = 1.0;
+  // disk1_pose.orientation.w = 1.0;
 
   geometry_msgs::msg::Pose disk2_pose;
-  disk2_pose.position.x = 0.5;
-  disk2_pose.position.y = -0.2;
+  disk2_pose = peg1_pose;
+  // disk2_pose.position.x = 0.5;
+  // disk2_pose.position.y = -0.2;
   disk2_pose.position.z = 0.03;
-  disk2_pose.orientation.w = 1.0;
+  // disk2_pose.orientation.w = 1.0;
 
   auto disk1 = makeMeshObject(
     "disk1",
@@ -165,7 +170,14 @@ void HanoiTaskNode::setupPlanningScene(int num_disks)
     "package://moveit_hanoi/meshes/disk2.stl",
     disk2_pose);
   
-  psi.applyCollisionObjects({ disk1, disk2 });
+  std::vector<moveit_msgs::msg::CollisionObject> objects;
+  objects.push_back(peg1);
+  objects.push_back(peg2);
+  objects.push_back(peg3);
+  objects.push_back(disk1);
+  objects.push_back(disk2);
+
+  psi.applyCollisionObjects(objects);
 
   // Update disk positions in peg data structures
   peg1_stack.push(1);
@@ -173,12 +185,16 @@ void HanoiTaskNode::setupPlanningScene(int num_disks)
 
 }
 
-bool HanoiTaskNode::isValidMove(int disk, int target_peg)
+taskInfo HanoiTaskNode::isValidMove(int disk, int target_peg)
 {
+  taskInfo result;
+  result.isTaskValid = false;
+  result.sourcePeg = -1;
+
   if (target_peg > 3 || target_peg < 1)
   {
     RCLCPP_ERROR(LOGGER, "Invalid peg. Peg %d does not exist", target_peg);
-    return false;
+    return result;
   }
 
   std::vector<int> top_disks { -1, -1, -1 };
@@ -187,36 +203,39 @@ bool HanoiTaskNode::isValidMove(int disk, int target_peg)
   if (!peg2_stack.empty()) top_disks[1] = peg2_stack.top();
   if (!peg3_stack.empty()) top_disks[2] = peg3_stack.top();
 
-  for (int i{}; i < top_disks.size(); ++i) {
+  for (std::size_t i{}; i < top_disks.size(); ++i) {
     
     // Check if disk is already on the target peg
     if (i == target_peg - 1) {
       if (top_disks[i] == disk) {
         RCLCPP_ERROR(LOGGER, "INVALID ACTION: Disk %d is already on peg %d", disk, target_peg);
-        return false;
+        return result;
       }
     }
     // Check if disk is graspable
     else {
       if (top_disks[i] == disk) {
-        return true;
+        result.isTaskValid = true;
+        result.sourcePeg = static_cast<int>(i) + 1;
+        return result;
       }
     }
   }
 
-  //Disk wasnt found
+  //Disk not found
   RCLCPP_ERROR(LOGGER, "Couldn't find disk %d", disk);
-  return false;
+  return result;
 }
 
 bool HanoiTaskNode::doTask(int disk, int target_peg)
 {
-
-  if (!isValidMove(disk, target_peg)) {
+  taskInfo currentTaskInfo = isValidMove(disk, target_peg);
+  if (!currentTaskInfo.isTaskValid) {
     return false;
   }
 
-  task_ = createTask(disk, target_peg);
+  int source_peg = currentTaskInfo.sourcePeg;
+  task_ = createTask(disk, source_peg, target_peg);
 
   try
   {
@@ -228,7 +247,7 @@ bool HanoiTaskNode::doTask(int disk, int target_peg)
     return false;
   }
 
-  if (!task_.plan(5))
+  if (!task_.plan(20))
   {
     RCLCPP_ERROR_STREAM(LOGGER, "Task planning failed.");
     return false;
@@ -245,9 +264,180 @@ bool HanoiTaskNode::doTask(int disk, int target_peg)
   return true;
 }
 
-mtc::Task HanoiTaskNode::createTask(int disk, int target_peg)
+mtc::Task HanoiTaskNode::createTask(int disk, int source_peg, int target_peg)
 {
+
+  mtc::Task task;
+  task.stages()->setName("move disk" + std::to_string(disk));
+  std::string diskName = "disk" + std::to_string(disk);
+
+  RCLCPP_INFO(LOGGER, "Creating pick task for diskName = %s", diskName.c_str());
   
+  task.loadRobotModel(node_);
+
+  const auto& arm_group_name = "panda_arm";
+  const auto& hand_group_name = "hand";
+  const auto& hand_frame = "panda_hand";
+
+  // Set task properties
+  task.setProperty("group", arm_group_name);
+  task.setProperty("eef", hand_group_name);
+  task.setProperty("ik_frame", hand_frame);
+
+  // Disable warnings for this line, as it's a variable that's set but not used in this example
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-but-set-variable"
+  mtc::Stage* current_state_ptr = nullptr;  // Forward current_state on to grasp pose generator
+#pragma GCC diagnostic pop
+
+  mtc::Stage* allow_collision_stage = nullptr;
+
+  auto stage_state_current = std::make_unique<mtc::stages::CurrentState>("current");
+  current_state_ptr = stage_state_current.get();
+  task.add(std::move(stage_state_current));
+
+  auto sampling_planner = std::make_shared<mtc::solvers::PipelinePlanner>(node_);
+  auto interpolation_planner = std::make_shared<mtc::solvers::JointInterpolationPlanner>();
+
+  auto cartesian_planner = std::make_shared<mtc::solvers::CartesianPath>();
+  cartesian_planner->setMaxVelocityScalingFactor(1.0);
+  cartesian_planner->setMaxAccelerationScalingFactor(1.0);
+  cartesian_planner->setStepSize(0.01);
+
+  auto stage_open_hand = 
+    std::make_unique<mtc::stages::MoveTo>("open hand", interpolation_planner);
+  stage_open_hand->setGroup(hand_group_name);
+  stage_open_hand->setGoal("open");
+  task.add(std::move(stage_open_hand));
+
+  {
+    auto stage =
+      std::make_unique<mtc::stages::ModifyPlanningScene>("allow disk1 hand collision debug");
+
+    auto hand_links =
+      task.getRobotModel()
+        ->getJointModelGroup(hand_group_name)
+        ->getLinkModelNamesWithCollisionGeometry();
+
+    stage->allowCollisions("disk1", hand_links, true);
+    stage->allowCollisions(diskName, hand_links, true);
+    stage->allowCollisions("peg1", hand_links, true);
+    allow_collision_stage = stage.get();
+    task.add(std::move(stage));
+  }
+
+  auto stage_move_to_pick = 
+    std::make_unique<mtc::stages::Connect>("move to pick",
+    mtc::stages::Connect::GroupPlannerVector { { arm_group_name, sampling_planner }});
+  stage_move_to_pick->setTimeout(10.0);
+  stage_move_to_pick->properties().configureInitFrom(mtc::Stage::PARENT);
+  task.add(std::move(stage_move_to_pick));
+
+  // Forward attach object_stage to place pose generator
+  mtc::Stage* attach_object_stage = nullptr;
+
+  // Pick
+  {
+
+    auto grasp = std::make_unique<mtc::SerialContainer>("pick_object");
+    task.properties().exposeTo(grasp->properties(), { "eef", "group", "ik_frame" });
+    grasp->properties().configureInitFrom(mtc::Stage::PARENT,
+      { "eef", "group", "ik_frame" });
+    
+    {
+      auto stage =
+        std::make_unique<mtc::stages::MoveRelative>("approach object", cartesian_planner);
+      stage->properties().set("marker_ns", "approach_object");
+      stage->properties().set("link", hand_frame);
+      stage->properties().configureInitFrom(mtc::Stage::PARENT, { "group" });
+      stage->setMinMaxDistance(0.1, 0.15);
+    
+      // Move the arm forward
+      geometry_msgs::msg::Vector3Stamped vec;
+      vec.header.frame_id = hand_frame;
+      vec.vector.z = 1.0;
+      stage->setDirection(vec);
+      grasp->insert(std::move(stage));
+    }
+
+
+    {
+      // Sample grasp pose
+      auto stage = std::make_unique<mtc::stages::GenerateGraspPose>("generate grasp pose");
+      stage->properties().configureInitFrom(mtc::Stage::PARENT);
+      stage->properties().set("marker_ns", "grasp-pose");
+      stage->setPreGraspPose("open");
+      stage->setObject(diskName);
+      stage->setAngleDelta(M_PI / 12);
+      // stage->setMonitoredStage(current_state_ptr);
+      stage->setMonitoredStage(allow_collision_stage);
+
+      Eigen::Isometry3d grasp_frame_transform = Eigen::Isometry3d::Identity();
+      Eigen::Quaternion q = Eigen::AngleAxisd(M_PI /2, Eigen::Vector3d::UnitX()) *
+                            Eigen::AngleAxisd(M_PI /2, Eigen::Vector3d::UnitY()) *
+                            Eigen::AngleAxisd(M_PI /2, Eigen::Vector3d::UnitZ());
+      grasp_frame_transform.linear() = q.matrix();
+      // grasp_frame_transform.translation().z() = 0.06 + 0.035*1.5;
+      grasp_frame_transform.translation().z() = 0.08 + 0.025;
+      grasp_frame_transform.translation().x() = -0.01;
+
+      // Compute IK
+      auto wrapper =
+        std::make_unique<mtc::stages::ComputeIK>("grasp pose IK", std::move(stage));
+      wrapper->setMaxIKSolutions(8);
+      wrapper->setMinSolutionDistance(1.0);
+      wrapper->setIKFrame(grasp_frame_transform, hand_frame);
+      wrapper->properties().configureInitFrom(mtc::Stage::PARENT, { "eef", "group" });
+      wrapper->properties().configureInitFrom(mtc::Stage::INTERFACE, { "target_pose" });
+      grasp->insert(std::move(wrapper));
+    }
+    {
+      auto stage =
+        std::make_unique<mtc::stages::ModifyPlanningScene>("allow collision (hand, object)");
+      stage->allowCollisions(diskName,
+                            task.getRobotModel()
+                                ->getJointModelGroup(hand_group_name)
+                                ->getLinkModelNamesWithCollisionGeometry(), true);
+      grasp->insert(std::move(stage));
+    }
+    {
+      auto stage = std::make_unique<mtc::stages::MoveTo>("close hand", interpolation_planner);
+      stage->setGroup(hand_group_name);
+      stage->setGoal("close");
+      grasp->insert(std::move(stage));
+    }
+    {
+      auto stage = std::make_unique<mtc::stages::ModifyPlanningScene>("attach object");
+      stage->attachObject(diskName, hand_frame);
+      stage->allowCollisions("disk1", "disk2", true);
+      attach_object_stage = stage.get();
+      grasp->insert(std::move(stage));
+    }
+    {
+      auto stage =
+        std::make_unique<mtc::stages::MoveRelative>("lift object", cartesian_planner);
+      stage->properties().configureInitFrom(mtc::Stage::PARENT, { "group" });
+      stage->setMinMaxDistance(0.2, 0.3);  
+      stage->setIKFrame(hand_frame);
+      stage->properties().set("marker_ns", "lift_object");
+
+      geometry_msgs::msg::Vector3Stamped vec;
+      vec.header.frame_id = "world";
+      vec.vector.z = 1.0;
+      stage->setDirection(vec);
+      grasp->insert(std::move(stage));
+    }
+
+    task.add(std::move(grasp));
+  }
+  // Place
+  {
+
+
+  }
+
+  return task;
+
 }
 
 int main(int argc, char ** argv)
@@ -267,6 +457,10 @@ int main(int argc, char ** argv)
   });
 
   hanoi_task_node->setupPlanningScene(2);
+  
+  rclcpp::sleep_for(std::chrono::seconds(1));
+  // Trying out a task
+  hanoi_task_node->doTask(2, 3);
 
   spin_thread->join();
   rclcpp::shutdown();

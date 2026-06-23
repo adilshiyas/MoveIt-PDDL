@@ -9,10 +9,10 @@ def generate_launch_description():
     # planning context
     moveit_config = (
         MoveItConfigsBuilder("moveit_resources_panda")
-        .robot_description(file_path="configs/panda.urdf.xacro")
+        .robot_description(file_path="config/panda.urdf.xacro")
         .trajectory_execution(file_path="config/gripper_moveit_controllers.yaml")
         .planning_pipelines(
-            pipelines=["ompl", "chomp"]
+            pipelines=["ompl", "chomp", "pilz_industrial_motion_planner"]
         )
         .to_moveit_configs()
     )
@@ -20,7 +20,7 @@ def generate_launch_description():
     # move_group
 
     move_group_capabilities = {
-        "capabilities": "move_group/ExeciteTaskSolutionCapability"
+        "capabilities": "move_group/ExecuteTaskSolutionCapability"
     }
 
     # Start move_group node/action server
@@ -71,11 +71,44 @@ def generate_launch_description():
         ]
     )
 
+    # ros2_control using FakeSystem as hardware
+    ros2_controllers_path = os.path.join(
+        get_package_share_directory("moveit_resources_panda_moveit_config"),
+        "config",
+        "ros2_controllers.yaml"
+    )
+    ros2_control_node = Node(
+        package="controller_manager",
+        executable="ros2_control_node",
+        parameters=[ros2_controllers_path],
+        remappings=[
+            ("/controller_manager/robot_description", "/robot_description"),
+        ],
+        output="both",
+    )
+
+    # Load controllers
+    load_controllers = []
+    for controller in [
+        "panda_arm_controller",
+        "panda_hand_controller",
+        "joint_state_broadcaster",
+    ]:
+        load_controllers += [
+            ExecuteProcess(
+                cmd=["ros2 run controller_manager spawner {}".format(controller)],
+                shell=True,
+                output="screen",
+            )
+        ]
+
     return LaunchDescription(
         [
             rviz_node,
             static_tf,
             robot_state_publisher,
             run_move_group_node,
+            ros2_control_node
         ]
+        + load_controllers
     )
