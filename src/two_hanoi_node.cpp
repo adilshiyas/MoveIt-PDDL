@@ -4,6 +4,7 @@
 #include <stdexcept>
 #include <rclcpp/rclcpp.hpp>
 #include <moveit/planning_scene/planning_scene.h>
+#include <moveit_msgs/msg/object_color.hpp>
 #include <moveit/planning_scene_interface/planning_scene_interface.h>
 #include <moveit/task_constructor/task.h>
 #include <moveit/task_constructor/solvers.h>
@@ -14,8 +15,13 @@
 #include <shape_msgs/msg/mesh.hpp>
 
 
+#include <filesystem>
+#include <algorithm>
+#include <ament_index_cpp/get_package_share_directory.hpp>
+
 static const rclcpp::Logger LOGGER = rclcpp::get_logger("moveit_hanoi");
 namespace mtc = moveit::task_constructor;
+namespace fs = std::filesystem;
 
 struct taskInfo
 {
@@ -37,6 +43,9 @@ public:
   void setupPlanningScene(int num_disks);
   //bool isValidMove(int disk, int target_peg);
   taskInfo isValidMove(int disk, int target_peg);
+  double getDiskRadius(int disk) const;
+  std::string getTopContactElement(int peg);
+  std::string getSecondFromTopContactElement(int peg);
 
 private:
   mtc::Task createTask(int disk, int source_peg, int target_peg);
@@ -49,11 +58,16 @@ private:
 
   double disk_thickness;
   double peg_height;
+  double platform_height_;
 
   // Peg positions
   geometry_msgs::msg::Pose peg1_pose;
   geometry_msgs::msg::Pose peg2_pose;
   geometry_msgs::msg::Pose peg3_pose;  
+
+  int num_disks_;
+  int disk_max_rad_;
+  int disk_min_rad_;
 
 };
 
@@ -64,23 +78,89 @@ HanoiTaskNode::HanoiTaskNode(const rclcpp::NodeOptions& options)
   // Disk thickness
   disk_thickness = 0.025;
   peg_height = 0.15;
+  platform_height_ = 0.025;
+  // platform_height_ = 0.1;
+  // platform_height_ = 0;
+
+  disk_max_rad_ = 0.035;
+  disk_min_rad_ = 0.02;
 
   // Initialize peg positions
-  peg1_pose.position.x = 0.5;
-  peg1_pose.position.y = -0.2;
-  peg1_pose.position.z = 0.075;
+  peg1_pose.position.x = 0.55;
+  peg1_pose.position.y = -0.25;
+  peg1_pose.position.z = 0.075 + platform_height_;
   peg1_pose.orientation.w = 1.0;
 
-  peg2_pose.position.x = 0.5;
+  peg2_pose.position.x = 0.55;
   peg2_pose.position.y = 0;
-  peg2_pose.position.z = 0.075;
+  peg2_pose.position.z = 0.075 + platform_height_;
   peg2_pose.orientation.w = 1.0;
 
-  peg3_pose.position.x = 0.5;
-  peg3_pose.position.y = 0.2;
-  peg3_pose.position.z = 0.075;
+  peg3_pose.position.x = 0.55;
+  peg3_pose.position.y = 0.25;
+  peg3_pose.position.z = 0.075 + platform_height_;
   peg3_pose.orientation.w = 1.0;
   
+}
+
+double HanoiTaskNode::getDiskRadius(int disk) const
+{
+    if (num_disks_ == 1)
+        return disk_max_rad_;
+
+    double step =
+        (disk_max_rad_ - disk_min_rad_) /
+        static_cast<double>(num_disks_ - 1);
+
+    return disk_max_rad_ - (disk - 1) * step;
+}
+
+std::string HanoiTaskNode::getTopContactElement(int peg)
+{
+    switch (peg)
+    {
+        case 1:
+            if (peg1_stack.empty())
+                return "platform";
+            return "disk" + std::to_string(peg1_stack.top());
+
+        case 2:
+            if (peg2_stack.empty())
+                return "platform";
+            return "disk" + std::to_string(peg2_stack.top());
+
+        case 3:
+            if (peg3_stack.empty())
+                return "platform";
+            return "disk" + std::to_string(peg3_stack.top());
+
+        default:
+            throw std::runtime_error("Invalid peg number");
+    }
+}
+
+std::string HanoiTaskNode::getSecondFromTopContactElement(int peg)
+{
+  std::stack<int> temp;
+
+  switch (peg) {
+    case 1: temp = peg1_stack; break;
+    case 2: temp = peg2_stack; break;
+    case 3: temp = peg3_stack; break;
+    default: throw std::runtime_error("Invalid peg");
+  }
+
+  if (temp.empty()) {
+    throw std::runtime_error("Source peg is empty");
+  }
+
+  temp.pop();  // remove disk being picked
+
+  if (temp.empty()) {
+    return "platform";
+  }
+
+  return "disk" + std::to_string(temp.top());
 }
 
 rclcpp::node_interfaces::NodeBaseInterface::SharedPtr HanoiTaskNode::getNodeBaseInterface()
@@ -114,6 +194,23 @@ moveit_msgs::msg::CollisionObject makeMeshObject(
 
 void HanoiTaskNode::setupPlanningScene(int num_disks)
 {
+
+  moveit::planning_interface::PlanningSceneInterface psi;
+
+  // Platform
+  moveit_msgs::msg::CollisionObject platform;
+  platform.id = "platform";
+  platform.header.frame_id = "world";
+  platform.primitives.resize(1);
+  platform.primitives[0].type = shape_msgs::msg::SolidPrimitive::BOX;
+  platform.primitives[0].dimensions = { 0.085, 0.575, platform_height_ };
+
+  geometry_msgs::msg::Pose platform_pose;
+  platform_pose = peg2_pose;
+  platform_pose.position.z = platform_height_/2;
+  platform.pose = platform_pose;
+  psi.applyCollisionObject(platform);
+
   // Peg 1
   moveit_msgs::msg::CollisionObject peg1;
   peg1.id = "peg1";
@@ -141,49 +238,95 @@ void HanoiTaskNode::setupPlanningScene(int num_disks)
   peg3.primitives[0].dimensions = { 0.15, 0.01 };
   peg3.pose = peg3_pose;
 
-  moveit::planning_interface::PlanningSceneInterface psi;
+  RCLCPP_INFO(
+    LOGGER,
+    "peg3_pose: x=%f y=%f z=%f w=%f",
+    peg3_pose.position.x,
+    peg3_pose.position.y,
+    peg3_pose.position.z,
+    peg3_pose.orientation.w
+  );
 
-  // Disk 1 and 2
-  // Add support for more disks later
-
-  geometry_msgs::msg::Pose disk1_pose;
-  disk1_pose = peg1_pose;
-  // disk1_pose.position.x = 0.5;
-  // disk1_pose.position.y = -0.2;
-  disk1_pose.position.z = 0.01;
-  // disk1_pose.orientation.w = 1.0;
-
-  geometry_msgs::msg::Pose disk2_pose;
-  disk2_pose = peg1_pose;
-  // disk2_pose.position.x = 0.5;
-  // disk2_pose.position.y = -0.2;
-  disk2_pose.position.z = 0.03;
-  // disk2_pose.orientation.w = 1.0;
-
-  auto disk1 = makeMeshObject(
-    "disk1",
-    "package://moveit_hanoi/meshes/disk1.stl",
-    disk1_pose);
+  // Apply peg collision objects to planning scene
   
-  auto disk2 = makeMeshObject(
-    "disk2",
-    "package://moveit_hanoi/meshes/disk2.stl",
-    disk2_pose);
+  std::vector<moveit_msgs::msg::CollisionObject> peg_objects;
+  peg_objects.push_back(peg1);
+  peg_objects.push_back(peg2);
+  peg_objects.push_back(peg3);
+  psi.applyCollisionObjects(peg_objects);
+
+  std::vector<moveit_msgs::msg::CollisionObject> disk_objects;
+  std::vector<moveit_msgs::msg::ObjectColor> disk_colors;
   
+  std::string package_name = "moveit_hanoi";
+  fs::path mesh_dir = ament_index_cpp::get_package_share_directory(package_name) + "/meshes";
 
-  
-  std::vector<moveit_msgs::msg::CollisionObject> objects;
-  objects.push_back(peg1);
-  objects.push_back(peg2);
-  objects.push_back(peg3);
-  objects.push_back(disk1);
-  objects.push_back(disk2);
+  std::vector<fs::path> mesh_files;
 
-  psi.applyCollisionObjects(objects);
+  for (const auto& entry : fs::directory_iterator(mesh_dir))
+  {
+    if (entry.path().extension() == ".stl")
+    {
+      mesh_files.push_back(entry.path());
+    }
+  }
 
-  // Update disk positions in peg data structures
-  peg1_stack.push(1);
-  peg1_stack.push(2);
+  std::sort(mesh_files.begin(), mesh_files.end());
+
+  // Derive disk poses: all disks start on peg1
+  for (size_t i{}; i < mesh_files.size(); ++i) {
+    std::string filename = mesh_files[i].filename().string();
+
+    geometry_msgs::msg::Pose disk_pose = peg1_pose;
+    disk_pose.position.z = (static_cast<double>(i) + 0.5) * disk_thickness + platform_height_;
+    
+    // Update disk positions in peg data structure
+    int disk_id = static_cast<int>(i) + 1;
+    peg1_stack.push(disk_id);
+
+    RCLCPP_INFO(LOGGER, "Added disk %d", disk_id);
+
+    std::string object_id = mesh_files[i].stem().string();
+    std::string mesh_uri = "package://" + package_name + "/meshes/" + filename;
+
+    auto disk = makeMeshObject(object_id, mesh_uri, disk_pose);
+    
+    moveit_msgs::msg::ObjectColor color;
+    color.id = disk.id;  // must match collision object id
+
+    if (disk_id == 1) {
+      color.color.r = 0.9;
+      color.color.g = 0.1;
+      color.color.b = 0.1;
+      color.color.a = 1.0;
+    } else if (disk_id == 2) {
+      color.color.r = 0.1;
+      color.color.g = 0.1;
+      color.color.b = 0.9;
+      color.color.a = 1.0;
+    } else {
+      color.color.r = 0.1;
+      color.color.g = 0.8;
+      color.color.b = 0.1;
+      color.color.a = 1.0;
+    }
+
+    disk_objects.push_back(disk);
+    disk_colors.push_back(color);
+
+  }
+
+  num_disks_ = static_cast<int>(mesh_files.size());
+
+  moveit_msgs::msg::PlanningScene scene;
+  scene.is_diff = true;
+  scene.world.collision_objects = disk_objects;
+  scene.object_colors = disk_colors;
+
+  psi.applyPlanningScene(scene);
+
+  // Add disks to planning scene
+  psi.applyCollisionObjects(disk_objects);
 
 }
 
@@ -263,6 +406,22 @@ bool HanoiTaskNode::doTask(int disk, int target_peg)
     return false;
   }
 
+  // Update source peg stack
+  switch(source_peg)
+  {
+    case 1: peg1_stack.pop(); break;
+    case 2: peg2_stack.pop(); break;
+    case 3: peg3_stack.pop(); break;
+  }
+
+  // Update target peg stack
+  switch(target_peg)
+  {
+    case 1: peg1_stack.push(disk); break;
+    case 2: peg2_stack.push(disk); break;
+    case 3: peg3_stack.push(disk); break;
+  }
+
   return true;
 }
 
@@ -299,12 +458,15 @@ mtc::Task HanoiTaskNode::createTask(int disk, int source_peg, int target_peg)
   task.add(std::move(stage_state_current));
 
   auto sampling_planner = std::make_shared<mtc::solvers::PipelinePlanner>(node_);
+  // sampling_planner->setProperty("max_velocity_scaling_factor", 0.1);
+  // sampling_planner->setProperty("max_acceleration_scaling_factor", 0.1);
+  
   auto interpolation_planner = std::make_shared<mtc::solvers::JointInterpolationPlanner>();
 
   auto cartesian_planner = std::make_shared<mtc::solvers::CartesianPath>();
   cartesian_planner->setMaxVelocityScalingFactor(1.0);
   cartesian_planner->setMaxAccelerationScalingFactor(1.0);
-  cartesian_planner->setStepSize(0.01);
+  cartesian_planner->setStepSize(0.0025);
 
   auto stage_open_hand = 
     std::make_unique<mtc::stages::MoveTo>("open hand", interpolation_planner);
@@ -312,21 +474,21 @@ mtc::Task HanoiTaskNode::createTask(int disk, int source_peg, int target_peg)
   stage_open_hand->setGoal("open");
   task.add(std::move(stage_open_hand));
 
-  {
-    auto stage =
-      std::make_unique<mtc::stages::ModifyPlanningScene>("allow disk1 hand collision debug");
+  // {
+  //   auto stage =
+  //     std::make_unique<mtc::stages::ModifyPlanningScene>("allow disk hand collision debug");
 
-    auto hand_links =
-      task.getRobotModel()
-        ->getJointModelGroup(hand_group_name)
-        ->getLinkModelNamesWithCollisionGeometry();
+  //   auto hand_links =
+  //     task.getRobotModel()
+  //       ->getJointModelGroup(hand_group_name)
+  //       ->getLinkModelNamesWithCollisionGeometry();
 
-    stage->allowCollisions("disk1", hand_links, true);
-    stage->allowCollisions(diskName, hand_links, true);
-    stage->allowCollisions("peg1", hand_links, true);
-    allow_collision_stage = stage.get();
-    task.add(std::move(stage));
-  }
+  //   stage->allowCollisions("disk1", hand_links, true);
+  //   stage->allowCollisions(diskName, hand_links, true);
+  //   stage->allowCollisions("peg1", hand_links, true);
+  //   allow_collision_stage = stage.get();
+  //   task.add(std::move(stage));
+  // }
 
   auto stage_move_to_pick = 
     std::make_unique<mtc::stages::Connect>("move to pick",
@@ -337,6 +499,17 @@ mtc::Task HanoiTaskNode::createTask(int disk, int source_peg, int target_peg)
 
   // Forward attach object_stage to place pose generator
   mtc::Stage* attach_object_stage = nullptr;
+  mtc::Stage* allow_place_collision_stage = nullptr;
+
+  auto hand_links =
+    task.getRobotModel()
+      ->getJointModelGroup(hand_group_name)
+      ->getLinkModelNamesWithCollisionGeometry();
+  std::string source_peg_name = "peg" + std::to_string(source_peg);
+  std::string target_peg_name = "peg" + std::to_string(target_peg);
+  std::string contact_elem_name = getTopContactElement(target_peg);
+  std::string source_contact_elem_name = getSecondFromTopContactElement(source_peg);
+  double place_clearance = 0.05;
 
   // Pick
   {
@@ -371,8 +544,8 @@ mtc::Task HanoiTaskNode::createTask(int disk, int source_peg, int target_peg)
       stage->setPreGraspPose("open");
       stage->setObject(diskName);
       stage->setAngleDelta(M_PI / 12);
-      // stage->setMonitoredStage(current_state_ptr);
-      stage->setMonitoredStage(allow_collision_stage);
+      stage->setMonitoredStage(current_state_ptr);
+      // stage->setMonitoredStage(allow_collision_stage);
 
       Eigen::Isometry3d grasp_frame_transform = Eigen::Isometry3d::Identity();
       Eigen::Quaternion q = Eigen::AngleAxisd(M_PI /2, Eigen::Vector3d::UnitX()) *
@@ -380,8 +553,9 @@ mtc::Task HanoiTaskNode::createTask(int disk, int source_peg, int target_peg)
                             Eigen::AngleAxisd(M_PI /2, Eigen::Vector3d::UnitZ());
       grasp_frame_transform.linear() = q.matrix();
       // grasp_frame_transform.translation().z() = 0.06 + 0.035*1.5;
-      grasp_frame_transform.translation().z() = 0.08 + 0.025;
-      grasp_frame_transform.translation().x() = -0.01;
+      // grasp_frame_transform.translation().z() = 0.13 + 0.02;
+      grasp_frame_transform.translation().z() = 0.12 + getDiskRadius(disk);
+      // grasp_frame_transform.translation().x() = -disk_thickness/2;
 
       // Compute IK
       auto wrapper =
@@ -396,10 +570,11 @@ mtc::Task HanoiTaskNode::createTask(int disk, int source_peg, int target_peg)
     {
       auto stage =
         std::make_unique<mtc::stages::ModifyPlanningScene>("allow collision (hand, object)");
-      stage->allowCollisions(diskName,
-                            task.getRobotModel()
-                                ->getJointModelGroup(hand_group_name)
-                                ->getLinkModelNamesWithCollisionGeometry(), true);
+      stage->allowCollisions(diskName, hand_links, true);
+      stage->allowCollisions(diskName, source_contact_elem_name, true);
+      stage->allowCollisions(source_peg_name, hand_links, true);
+      stage->allowCollisions(source_peg_name, diskName, true);
+
       grasp->insert(std::move(stage));
     }
     {
@@ -411,7 +586,7 @@ mtc::Task HanoiTaskNode::createTask(int disk, int source_peg, int target_peg)
     {
       auto stage = std::make_unique<mtc::stages::ModifyPlanningScene>("attach object");
       stage->attachObject(diskName, hand_frame);
-      stage->allowCollisions("disk1", "disk2", true);
+      // stage->allowCollisions("disk1", "disk2", true);
       attach_object_stage = stage.get();
       grasp->insert(std::move(stage));
     }
@@ -419,7 +594,26 @@ mtc::Task HanoiTaskNode::createTask(int disk, int source_peg, int target_peg)
       auto stage =
         std::make_unique<mtc::stages::MoveRelative>("lift object", cartesian_planner);
       stage->properties().configureInitFrom(mtc::Stage::PARENT, { "group" });
-      stage->setMinMaxDistance(0.2, 0.3);  
+      
+      int source_peg_length = -1;
+      double raise_height{};
+      switch(source_peg)
+      {
+        case 1: source_peg_length = peg1_stack.size(); break;
+        case 2: source_peg_length = peg2_stack.size(); break;
+        case 3: source_peg_length = peg3_stack.size(); break;
+      }
+      if (source_peg_length != -1) {
+        raise_height = place_clearance + (peg_height - (disk_thickness/2 + std::max(source_peg_length - 1, 0)*disk_thickness));
+      }
+      else {
+        RCLCPP_ERROR(LOGGER, "Cant find target peg length.");
+      }
+      
+      
+      
+      // stage->setMinMaxDistance(0.3, 0.3);  
+      stage->setMinMaxDistance(raise_height, raise_height);
       stage->setIKFrame(hand_frame);
       stage->properties().set("marker_ns", "lift_object");
 
@@ -429,8 +623,19 @@ mtc::Task HanoiTaskNode::createTask(int disk, int source_peg, int target_peg)
       stage->setDirection(vec);
       grasp->insert(std::move(stage));
     }
+    {
+      auto stage =
+        std::make_unique<mtc::stages::ModifyPlanningScene>("forbid collision (hand, source_peg)");
+      
+      stage->allowCollisions(diskName, source_contact_elem_name, false);
+      stage->allowCollisions(source_peg_name, hand_links, false);
+      stage->allowCollisions(source_peg_name, diskName, false);
+
+      grasp->insert(std::move(stage));
+    }
 
     task.add(std::move(grasp));
+
   }
   // Place
   {
@@ -438,7 +643,7 @@ mtc::Task HanoiTaskNode::createTask(int disk, int source_peg, int target_peg)
       "move_to_place",
       mtc::stages::Connect::GroupPlannerVector{ { arm_group_name, sampling_planner },
                                                 { hand_group_name, interpolation_planner} });
-    stage_move_to_place->setTimeout(10.0);
+    stage_move_to_place->setTimeout(20.0);
     stage_move_to_place->properties().configureInitFrom(mtc::Stage::PARENT);
     task.add(std::move(stage_move_to_place));
   }
@@ -447,55 +652,118 @@ mtc::Task HanoiTaskNode::createTask(int disk, int source_peg, int target_peg)
     task.properties().exposeTo(place->properties(), { "eef", "group", "ik_frame" });
     place->properties().configureInitFrom(mtc::Stage::PARENT,
                                           { "eef", "group", "ik_frame" });
-
-    {
-      // Get place pose
-      auto stage = std::make_unique<mtc::stages::GeneratePlacePose>("generate place pose");
-      stage->properties().configureInitFrom(mtc::Stage::PARENT);
-      stage->properties().set("marker_ns", "place_pose");
-      stage->setObject(diskName);
-
-      geometry_msgs::msg::PoseStamped target_pose_msg;
-      target_pose_msg.header.frame_id = "world";
-      
-      switch (target_peg)
-      {
-        case 1: target_pose_msg.pose = peg1_pose; break;
-        case 2: target_pose_msg.pose = peg2_pose; break;
-        case 3: target_pose_msg.pose = peg3_pose; break;
-        default: RCLCPP_ERROR(LOGGER, "Unexpected target peg %d", target_peg);
-      }
-
-      target_pose_msg.pose.position.z += (peg_height/2 + 0.1);
-      stage->setPose(target_pose_msg);
-      stage->setMonitoredStage(attach_object_stage);
-
-      // Compute IK
-      auto wrapper =
-        std::make_unique<mtc::stages::ComputeIK>("place pose IK", std::move(stage));
-      wrapper->setMaxIKSolutions(8);
-      wrapper->setMinSolutionDistance(1.0);
-      wrapper->setIKFrame(diskName);
-      wrapper->properties().configureInitFrom(mtc::Stage::PARENT, { "eef", "group" });
-      wrapper->properties().configureInitFrom(mtc::Stage::INTERFACE, { "target_pose" });
-      place->insert(std::move(wrapper));
-    }
     {
       auto stage =
         std::make_unique<mtc::stages::ModifyPlanningScene>("allow place collisions");
-      auto hand_links =
-        task.getRobotModel()
-          ->getJointModelGroup(hand_group_name)
-          ->getLinkModelNamesWithCollisionGeometry();
+      
+      stage->properties().configureInitFrom(mtc::Stage::PARENT);
 
-      std::string target_peg_name = "peg" + std::to_string(target_peg);
-
+      stage->allowCollisions(contact_elem_name, diskName, true);
+      stage->allowCollisions(contact_elem_name, hand_links, true);
       stage->allowCollisions(target_peg_name, hand_links, true);
-      stage->allowCollisions(diskName, hand_links, true);
+      stage->allowCollisions(target_peg_name, diskName, true);
+      allow_place_collision_stage = stage.get();
+      // stage->allowCollisions(contact_elem_name, hand_links, true);
       // stage->allowCollisions("peg1", hand_links, true);
       
       place->insert(std::move(stage));
     }
+    {
+      auto alternatives = std::make_unique<mtc::Alternatives>("place pose alternatives");
+      
+      place->properties().exposeTo(alternatives->properties(), { "eef", "group", "ik_frame" });
+      alternatives->properties().configureInitFrom(mtc::Stage::PARENT, { "eef", "group", "ik_frame" });
+
+      for (double yaw: {0.0, M_PI/2, M_PI, -M_PI/2}) {
+        auto stage = std::make_unique<mtc::stages::GeneratePlacePose>("generate place pose");
+        stage->properties().configureInitFrom(mtc::Stage::PARENT);
+        stage->properties().set("marker_ns", "place_pose");
+        stage->setObject(diskName);
+
+        geometry_msgs::msg::PoseStamped target_pose_msg;
+        target_pose_msg.header.frame_id = "world";
+        
+        switch (target_peg)
+        {
+          case 1: target_pose_msg.pose = peg1_pose; break;
+          case 2: target_pose_msg.pose = peg2_pose; break;
+          case 3: target_pose_msg.pose = peg3_pose; break;
+          default: RCLCPP_ERROR(LOGGER, "Unexpected target peg %d", target_peg);
+        }
+
+        target_pose_msg.pose.position.z += (peg_height/2 + place_clearance);
+        
+        tf2::Quaternion q;
+        q.setRPY(0.0, 0.0, yaw);
+        target_pose_msg.pose.orientation = tf2::toMsg(q);
+
+        stage->setPose(target_pose_msg);
+        stage->setMonitoredStage(attach_object_stage); 
+      
+        // Compute IK
+        auto wrapper =
+          std::make_unique<mtc::stages::ComputeIK>("place pose IK", std::move(stage));
+        wrapper->setMaxIKSolutions(8);
+        wrapper->setMinSolutionDistance(1.0);
+        wrapper->setIKFrame(diskName);
+        wrapper->properties().configureInitFrom(mtc::Stage::PARENT, { "eef", "group" });
+        wrapper->properties().configureInitFrom(mtc::Stage::INTERFACE, { "target_pose" });
+        
+        alternatives->insert(std::move(wrapper));
+      }
+      place->insert(std::move(alternatives));
+    }
+    
+    // // Old Place IK stage
+    // {
+    //   // Get place pose
+    //   auto stage = std::make_unique<mtc::stages::GeneratePlacePose>("generate place pose");
+    //   stage->properties().configureInitFrom(mtc::Stage::PARENT);
+    //   stage->properties().set("marker_ns", "place_pose");
+    //   stage->setObject(diskName);
+
+    //   geometry_msgs::msg::PoseStamped target_pose_msg;
+    //   target_pose_msg.header.frame_id = "world";
+      
+    //   switch (target_peg)
+    //   {
+    //     case 1: target_pose_msg.pose = peg1_pose; break;
+    //     case 2: target_pose_msg.pose = peg2_pose; break;
+    //     case 3: target_pose_msg.pose = peg3_pose; break;
+    //     default: RCLCPP_ERROR(LOGGER, "Unexpected target peg %d", target_peg);
+    //   }
+
+    //   target_pose_msg.pose.position.z += (peg_height/2 + place_clearance);
+
+    //   stage->setPose(target_pose_msg);
+    //   stage->setMonitoredStage(attach_object_stage);
+      
+    //   // Compute IK
+    //   auto wrapper =
+    //     std::make_unique<mtc::stages::ComputeIK>("place pose IK", std::move(stage));
+    //   wrapper->setMaxIKSolutions(8);
+    //   wrapper->setMinSolutionDistance(1.0);
+    //   wrapper->setIKFrame(diskName);
+    //   wrapper->properties().configureInitFrom(mtc::Stage::PARENT, { "eef", "group" });
+    //   wrapper->properties().configureInitFrom(mtc::Stage::INTERFACE, { "target_pose" });
+    //   place->insert(std::move(wrapper));
+    // }
+
+    {
+      auto stage =
+        std::make_unique<mtc::stages::ModifyPlanningScene>("allow place collisions");
+
+      stage->allowCollisions(contact_elem_name, diskName, true);
+      stage->allowCollisions(target_peg_name, hand_links, true);
+      stage->allowCollisions(target_peg_name, diskName, true);
+      // stage->allowCollisions(contact_elem_name, hand_links, true);
+      // stage->allowCollisions("peg1", hand_links, true);
+      
+      place->insert(std::move(stage));
+    }
+
+    // Testing
+
     {
       auto stage = std::make_unique<mtc::stages::MoveRelative>("lower object", cartesian_planner);
       stage->properties().configureInitFrom(mtc::Stage::PARENT, { "group" });
@@ -511,17 +779,20 @@ mtc::Task HanoiTaskNode::createTask(int disk, int source_peg, int target_peg)
         case 3: target_peg_length = peg3_stack.size(); break;
       }
       if (target_peg_length != -1) {
-        lower_height = peg_height + 0.1 - (disk_thickness/2 + target_peg_length*disk_thickness);
+        lower_height = peg_height + 0.3 - (disk_thickness/2 + target_peg_length*disk_thickness);
+        lower_height = place_clearance + peg_height - (disk_thickness/2 + target_peg_length*disk_thickness);
       }
       else {
         RCLCPP_ERROR(LOGGER, "Cant find target peg length.");
       }
+      // lower_height = place_clearance;
+
       
       stage->setMinMaxDistance(lower_height, lower_height);
       stage->setIKFrame(hand_frame);
       stage->properties().set("marker_ns", "lower_object");
 
-      // Set upward direction
+      // Set downward direction
       geometry_msgs::msg::Vector3Stamped vec;
       vec.header.frame_id = "world";
       vec.vector.z = -1.0;
@@ -588,6 +859,10 @@ int main(int argc, char ** argv)
   rclcpp::sleep_for(std::chrono::seconds(1));
   // Trying out a task
   hanoi_task_node->doTask(2, 3);
+  hanoi_task_node->doTask(1, 3);
+
+  hanoi_task_node->doTask(1, 2);
+  hanoi_task_node->doTask(2, 2);
 
   spin_thread->join();
   rclcpp::shutdown();
