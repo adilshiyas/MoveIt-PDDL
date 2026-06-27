@@ -29,48 +29,59 @@ Robot Execution
 
 ## Requirements
 1. MoveIt 2
+
 You will need to underlay a MoveIt workspace. Check the MoveIt 2 documentation here.
 
-2. Trimesh
-Needed for disk mesh generation
+3. Trimesh
+
+Used to generate the STL meshes for the Tower of Hanoi disks.
 ```text
 pip install trimesh
 ```
 
 3. Fast Downward
-For solving PDDL problems. Check the documentation on how to install. Building from source is recommended. You will need to pass your Fast Downward directory as a ROS parameter later.
+Used to solve the PDDL task planning problem. Installing from source is recommended. The path to your Fast Downward installation must be provided as a ROS parameter when running the planner.
 
 ## Usage
 
 ### Generating Disk Meshes
-The package currently relies on running scripts/generate_disk_meshes.py to populate /meshes/ with .stl files. Generate meshes for any number of disks
+The package uses procedurally generated STL meshes for the Hanoi disks. Before building the package, generate meshes for the desired number of disks:
 
 ```text
 python scripts/generate_disk_meshes.py --disks 4
 ```
 
-### Build and Run Launch Files
+The generated meshes will be written to the ```meshes/``` directory.
 
-Build and source workspace
+### Build the Workspace
 ```text
-colcon build 
+colcon build
 source install/local_setup.bash
 ```
 
-Launching RViz and MoveIt controllers
+### Launch MoveIt 2
+
+Start RViz, move_group, and the required controllers:
 ```text
 ros2 launch moveit_hanoi demo.launch.py
 ```
 
-Launching hanoi_mtc_executor
+### Launching the MTC Executor
+
+Start the MoveIt Task Constructor execution node:
 ```text
 ros2 launch moveit_hanoi hanoi_demo.launch.py
 ```
 
-Run hanoi_planner node
+### Generate a Task Plan
+
+Run the PDDL planner, providing the path to your Fast Downward installation via the `fast_downward_path` ROS parameter.
+
 ```text
-ros2 run moveit_hanoi hanoi_planner.py
+ros2 run moveit_hanoi hanoi_planner.py --ros-args \
+  -p fast_downward_path:=/path/to/fast-downward
 ```
+Replace `/path/to/fast-downward` with the root directory of your Fast Downward installation.
 
 
 
