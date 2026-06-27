@@ -1,0 +1,14 @@
+build/
+install/
+log/
+
+.vscode/
+**/.vscode/
+
+__pycache__/
+*.pyc
+
+meshes/
+
+*.swp
+*~
