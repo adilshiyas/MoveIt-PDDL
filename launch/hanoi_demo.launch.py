@@ -8,7 +8,7 @@ def generate_launch_description():
     # Hanoi demo node
     hanoi_demo = Node(
         package="moveit_hanoi",
-        executable="two_hanoi_node",
+        executable="hanoi_mtc_executor",
         output="screen",
         parameters=[
             moveit_config

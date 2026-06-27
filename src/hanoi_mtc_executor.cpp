@@ -71,7 +71,7 @@ private:
 };
 
 HanoiTaskNode::HanoiTaskNode(const rclcpp::NodeOptions& options)
-  : node_{ std::make_shared<rclcpp::Node>("hanoi_node", options) }
+  : node_{ std::make_shared<rclcpp::Node>("hanoi_mtc_executor", options) }
 {
 
   // Disk thickness

@@ -20,14 +20,13 @@ find_package(rosidl_default_generators REQUIRED)
 rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/ExecuteMove.srv"
 )
-
-add_executable(two_hanoi_node src/two_hanoi_node.cpp)
-target_include_directories(two_hanoi_node PUBLIC
+add_executable(hanoi_mtc_executor src/hanoi_mtc_executor.cpp)
+target_include_directories(hanoi_mtc_executor PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
-target_compile_features(two_hanoi_node PUBLIC c_std_99 cxx_std_17)  # Require C99 and C++17
+target_compile_features(hanoi_mtc_executor PUBLIC c_std_99 cxx_std_17)  # Require C99 and C++17
 ament_target_dependencies(
-  two_hanoi_node
+  hanoi_mtc_executor
   "rclcpp"
   "moveit_ros_planning_interface"
   "moveit_task_constructor_core"
@@ -42,13 +41,13 @@ rosidl_get_typesupport_target(cpp_typesupport_target
   "rosidl_typesupport_cpp"
 )
 
-target_link_libraries(two_hanoi_node
+target_link_libraries(hanoi_mtc_executor
   "${cpp_typesupport_target}"
 )
 
 ament_export_dependencies(rosidl_default_runtime)
 
-install(TARGETS two_hanoi_node
+install(TARGETS hanoi_mtc_executor
   DESTINATION lib/${PROJECT_NAME})
 
 install(PROGRAMS scripts/hanoi_planner.py
