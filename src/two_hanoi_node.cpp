@@ -14,6 +14,7 @@
 #include <geometric_shapes/shape_operations.h>
 #include <shape_msgs/msg/mesh.hpp>
 
+#include "moveit_hanoi/srv/execute_move.hpp"
 
 #include <filesystem>
 #include <algorithm>
@@ -34,21 +35,19 @@ class HanoiTaskNode
 public:
   HanoiTaskNode(const rclcpp::NodeOptions& options);
   rclcpp::node_interfaces::NodeBaseInterface::SharedPtr getNodeBaseInterface();
-  // void doTask(
-  //   const std::string& disk_name,
-  //   const std::string& source_peg,
-  //   const std::string& target_peg
-  // );
-  bool doTask(int disk, int target_peg);
-  void setupPlanningScene(int num_disks);
-  //bool isValidMove(int disk, int target_peg);
+  
+  bool doTask(int disk, int target_peg, bool go_home_after);
+  void setupPlanningScene();
   taskInfo isValidMove(int disk, int target_peg);
   double getDiskRadius(int disk) const;
+
   std::string getTopContactElement(int peg);
   std::string getSecondFromTopContactElement(int peg);
 
 private:
-  mtc::Task createTask(int disk, int source_peg, int target_peg);
+  mtc::Task createTask(int disk, int source_peg, int target_peg, bool go_home_after);
+  rclcpp::Service<moveit_hanoi::srv::ExecuteMove>::SharedPtr execute_move_service_;
+  
   mtc::Task task_;
   rclcpp::Node::SharedPtr node_;
 
@@ -79,8 +78,6 @@ HanoiTaskNode::HanoiTaskNode(const rclcpp::NodeOptions& options)
   disk_thickness = 0.025;
   peg_height = 0.15;
   platform_height_ = 0.025;
-  // platform_height_ = 0.1;
-  // platform_height_ = 0;
 
   disk_max_rad_ = 0.035;
   disk_min_rad_ = 0.02;
@@ -101,6 +98,25 @@ HanoiTaskNode::HanoiTaskNode(const rclcpp::NodeOptions& options)
   peg3_pose.position.z = 0.075 + platform_height_;
   peg3_pose.orientation.w = 1.0;
   
+  // Create service
+  execute_move_service_ = 
+    node_->create_service<moveit_hanoi::srv::ExecuteMove>(
+      "execute_move",
+      [this](
+        const std::shared_ptr<moveit_hanoi::srv::ExecuteMove::Request> request,
+        std::shared_ptr<moveit_hanoi::srv::ExecuteMove::Response> response)
+      {
+        RCLCPP_INFO(LOGGER, 
+          "Recieved move request: disk=%d, target_peg=%d",
+          request->disk,
+          request->target_peg);
+
+        bool ok = this->doTask(request->disk, request->target_peg, request->go_home_after);
+
+        response->success = ok;
+        response->message = ok ? "Move executed successfully" : "Move failed";
+      });
+
 }
 
 double HanoiTaskNode::getDiskRadius(int disk) const
@@ -192,7 +208,7 @@ moveit_msgs::msg::CollisionObject makeMeshObject(
   return object;
 }
 
-void HanoiTaskNode::setupPlanningScene(int num_disks)
+void HanoiTaskNode::setupPlanningScene()
 {
 
   moveit::planning_interface::PlanningSceneInterface psi;
@@ -304,10 +320,20 @@ void HanoiTaskNode::setupPlanningScene(int num_disks)
       color.color.g = 0.1;
       color.color.b = 0.9;
       color.color.a = 1.0;
-    } else {
+    } else if (disk_id == 3 ){
       color.color.r = 0.1;
-      color.color.g = 0.8;
+      color.color.g = 0.9;
       color.color.b = 0.1;
+      color.color.a = 1.0;
+    } else if (disk_id == 4) {
+      color.color.r = 0.9;
+      color.color.g = 0.9;
+      color.color.b = 0.1;
+      color.color.a = 1.0;
+    } else {
+      color.color.r = 0.5;
+      color.color.g = 0.5;
+      color.color.b = 0.5;
       color.color.a = 1.0;
     }
 
@@ -351,7 +377,7 @@ taskInfo HanoiTaskNode::isValidMove(int disk, int target_peg)
   for (std::size_t i{}; i < top_disks.size(); ++i) {
     
     // Check if disk is already on the target peg
-    if (i == target_peg - 1) {
+    if (i == static_cast<std::size_t>(target_peg - 1)) {
       if (top_disks[i] == disk) {
         RCLCPP_ERROR(LOGGER, "INVALID ACTION: Disk %d is already on peg %d", disk, target_peg);
         return result;
@@ -372,7 +398,7 @@ taskInfo HanoiTaskNode::isValidMove(int disk, int target_peg)
   return result;
 }
 
-bool HanoiTaskNode::doTask(int disk, int target_peg)
+bool HanoiTaskNode::doTask(int disk, int target_peg, bool go_home_after)
 {
   taskInfo currentTaskInfo = isValidMove(disk, target_peg);
   if (!currentTaskInfo.isTaskValid) {
@@ -380,7 +406,7 @@ bool HanoiTaskNode::doTask(int disk, int target_peg)
   }
 
   int source_peg = currentTaskInfo.sourcePeg;
-  task_ = createTask(disk, source_peg, target_peg);
+  task_ = createTask(disk, source_peg, target_peg, go_home_after);
 
   try
   {
@@ -425,7 +451,7 @@ bool HanoiTaskNode::doTask(int disk, int target_peg)
   return true;
 }
 
-mtc::Task HanoiTaskNode::createTask(int disk, int source_peg, int target_peg)
+mtc::Task HanoiTaskNode::createTask(int disk, int source_peg, int target_peg, bool go_home_after)
 {
 
   mtc::Task task;
@@ -451,7 +477,7 @@ mtc::Task HanoiTaskNode::createTask(int disk, int source_peg, int target_peg)
   mtc::Stage* current_state_ptr = nullptr;  // Forward current_state on to grasp pose generator
 #pragma GCC diagnostic pop
 
-  mtc::Stage* allow_collision_stage = nullptr;
+  // mtc::Stage* allow_collision_stage = nullptr;
 
   auto stage_state_current = std::make_unique<mtc::stages::CurrentState>("current");
   current_state_ptr = stage_state_current.get();
@@ -499,7 +525,7 @@ mtc::Task HanoiTaskNode::createTask(int disk, int source_peg, int target_peg)
 
   // Forward attach object_stage to place pose generator
   mtc::Stage* attach_object_stage = nullptr;
-  mtc::Stage* allow_place_collision_stage = nullptr;
+  // mtc::Stage* allow_place_collision_stage = nullptr;
 
   auto hand_links =
     task.getRobotModel()
@@ -662,7 +688,7 @@ mtc::Task HanoiTaskNode::createTask(int disk, int source_peg, int target_peg)
       stage->allowCollisions(contact_elem_name, hand_links, true);
       stage->allowCollisions(target_peg_name, hand_links, true);
       stage->allowCollisions(target_peg_name, diskName, true);
-      allow_place_collision_stage = stage.get();
+      // allow_place_collision_stage = stage.get();
       // stage->allowCollisions(contact_elem_name, hand_links, true);
       // stage->allowCollisions("peg1", hand_links, true);
       
@@ -713,41 +739,6 @@ mtc::Task HanoiTaskNode::createTask(int disk, int source_peg, int target_peg)
       }
       place->insert(std::move(alternatives));
     }
-    
-    // // Old Place IK stage
-    // {
-    //   // Get place pose
-    //   auto stage = std::make_unique<mtc::stages::GeneratePlacePose>("generate place pose");
-    //   stage->properties().configureInitFrom(mtc::Stage::PARENT);
-    //   stage->properties().set("marker_ns", "place_pose");
-    //   stage->setObject(diskName);
-
-    //   geometry_msgs::msg::PoseStamped target_pose_msg;
-    //   target_pose_msg.header.frame_id = "world";
-      
-    //   switch (target_peg)
-    //   {
-    //     case 1: target_pose_msg.pose = peg1_pose; break;
-    //     case 2: target_pose_msg.pose = peg2_pose; break;
-    //     case 3: target_pose_msg.pose = peg3_pose; break;
-    //     default: RCLCPP_ERROR(LOGGER, "Unexpected target peg %d", target_peg);
-    //   }
-
-    //   target_pose_msg.pose.position.z += (peg_height/2 + place_clearance);
-
-    //   stage->setPose(target_pose_msg);
-    //   stage->setMonitoredStage(attach_object_stage);
-      
-    //   // Compute IK
-    //   auto wrapper =
-    //     std::make_unique<mtc::stages::ComputeIK>("place pose IK", std::move(stage));
-    //   wrapper->setMaxIKSolutions(8);
-    //   wrapper->setMinSolutionDistance(1.0);
-    //   wrapper->setIKFrame(diskName);
-    //   wrapper->properties().configureInitFrom(mtc::Stage::PARENT, { "eef", "group" });
-    //   wrapper->properties().configureInitFrom(mtc::Stage::INTERFACE, { "target_pose" });
-    //   place->insert(std::move(wrapper));
-    // }
 
     {
       auto stage =
@@ -762,7 +753,22 @@ mtc::Task HanoiTaskNode::createTask(int disk, int source_peg, int target_peg)
       place->insert(std::move(stage));
     }
 
-    // Testing
+    // Get lower_height
+    int target_peg_length = -1;
+    double lower_height{};
+    switch(target_peg)
+    {
+      case 1: target_peg_length = peg1_stack.size(); break;
+      case 2: target_peg_length = peg2_stack.size(); break;
+      case 3: target_peg_length = peg3_stack.size(); break;
+    }
+    if (target_peg_length != -1) {
+      lower_height = peg_height + 0.3 - (disk_thickness/2 + target_peg_length*disk_thickness);
+      lower_height = place_clearance + peg_height - (disk_thickness/2 + target_peg_length*disk_thickness);
+    }
+    else {
+      RCLCPP_ERROR(LOGGER, "Cant find target peg length.");
+    }
 
     {
       auto stage = std::make_unique<mtc::stages::MoveRelative>("lower object", cartesian_planner);
@@ -770,21 +776,7 @@ mtc::Task HanoiTaskNode::createTask(int disk, int source_peg, int target_peg)
       
       // Get current height of stack on target peg
 
-      int target_peg_length = -1;
-      double lower_height{};
-      switch(target_peg)
-      {
-        case 1: target_peg_length = peg1_stack.size(); break;
-        case 2: target_peg_length = peg2_stack.size(); break;
-        case 3: target_peg_length = peg3_stack.size(); break;
-      }
-      if (target_peg_length != -1) {
-        lower_height = peg_height + 0.3 - (disk_thickness/2 + target_peg_length*disk_thickness);
-        lower_height = place_clearance + peg_height - (disk_thickness/2 + target_peg_length*disk_thickness);
-      }
-      else {
-        RCLCPP_ERROR(LOGGER, "Cant find target peg length.");
-      }
+      
       // lower_height = place_clearance;
 
       
@@ -807,6 +799,33 @@ mtc::Task HanoiTaskNode::createTask(int disk, int source_peg, int target_peg)
       place->insert(std::move(stage));
     }
     {
+      auto stage = std::make_unique<mtc::stages::ModifyPlanningScene>("detach object");
+      stage->detachObject(diskName, hand_frame);
+      place->insert(std::move(stage));
+    }
+    {
+      auto stage = std::make_unique<mtc::stages::MoveRelative>("raise arm", cartesian_planner);
+      stage->properties().configureInitFrom(mtc::Stage::PARENT, { "group" });
+      
+      // Get current height of stack on target peg
+
+      
+      // lower_height = place_clearance;
+
+      
+      stage->setMinMaxDistance(lower_height, lower_height);
+      stage->setIKFrame(hand_frame);
+      stage->properties().set("marker_ns", "raise arm");
+
+      // Set downward direction
+      geometry_msgs::msg::Vector3Stamped vec;
+      vec.header.frame_id = "world";
+      vec.vector.z = 1.0;
+      stage->setDirection(vec);
+      place->insert(std::move(stage));
+
+    }
+    {
       std::string target_peg_name = "peg" + std::to_string(target_peg);
       auto stage =
           std::make_unique<mtc::stages::ModifyPlanningScene>("forbid collision (hand,object)");
@@ -817,15 +836,12 @@ mtc::Task HanoiTaskNode::createTask(int disk, int source_peg, int target_peg)
       stage->allowCollisions(target_peg_name, hand_links, false);
       place->insert(std::move(stage));
     }
-    {
-      auto stage = std::make_unique<mtc::stages::ModifyPlanningScene>("detach object");
-      stage->detachObject(diskName, hand_frame);
-      place->insert(std::move(stage));
-    }
+    
 
     task.add(std::move(place));
   } 
   
+  if (go_home_after)
   {
     // Go home
     auto stage = std::make_unique<mtc::stages::MoveTo>("go home", sampling_planner);
@@ -846,25 +862,26 @@ int main(int argc, char ** argv)
   options.automatically_declare_parameters_from_overrides(true);
 
   auto hanoi_task_node = std::make_shared<HanoiTaskNode>(options);
+  
+  // Setup planning scene
+  hanoi_task_node->setupPlanningScene();
+  rclcpp::sleep_for(std::chrono::seconds(1));
+
+  RCLCPP_INFO(LOGGER, "Planning scene ready. Waiting for service requests...");
+  
   rclcpp::executors::MultiThreadedExecutor executor;
 
-  auto spin_thread = std::make_unique<std::thread>([&executor, &hanoi_task_node](){
-    executor.add_node(hanoi_task_node->getNodeBaseInterface());
-    executor.spin();
-    executor.remove_node(hanoi_task_node->getNodeBaseInterface());
-  });
+  // auto spin_thread = std::make_unique<std::thread>([&executor, &hanoi_task_node](){
+  //   executor.add_node(hanoi_task_node->getNodeBaseInterface());
+  //   executor.spin();
+  //   executor.remove_node(hanoi_task_node->getNodeBaseInterface());
+  // });
 
-  hanoi_task_node->setupPlanningScene(2);
-  
-  rclcpp::sleep_for(std::chrono::seconds(1));
-  // Trying out a task
-  hanoi_task_node->doTask(2, 3);
-  hanoi_task_node->doTask(1, 3);
+  executor.add_node(hanoi_task_node->getNodeBaseInterface());
+  executor.spin();
 
-  hanoi_task_node->doTask(1, 2);
-  hanoi_task_node->doTask(2, 2);
+  executor.remove_node(hanoi_task_node->getNodeBaseInterface());
 
-  spin_thread->join();
   rclcpp::shutdown();
   return 0;
 }

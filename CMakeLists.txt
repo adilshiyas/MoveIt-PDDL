@@ -15,6 +15,12 @@ find_package(moveit_visual_tools REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
 find_package(tf2_eigen REQUIRED)
 
+find_package(rosidl_default_generators REQUIRED)
+
+rosidl_generate_interfaces(${PROJECT_NAME}
+  "srv/ExecuteMove.srv"
+)
+
 add_executable(two_hanoi_node src/two_hanoi_node.cpp)
 target_include_directories(two_hanoi_node PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -31,8 +37,25 @@ ament_target_dependencies(
   "tf2_eigen"
 )
 
+rosidl_get_typesupport_target(cpp_typesupport_target
+  ${PROJECT_NAME}
+  "rosidl_typesupport_cpp"
+)
+
+target_link_libraries(two_hanoi_node
+  "${cpp_typesupport_target}"
+)
+
+ament_export_dependencies(rosidl_default_runtime)
+
 install(TARGETS two_hanoi_node
   DESTINATION lib/${PROJECT_NAME})
+
+install(PROGRAMS scripts/hanoi_planner.py
+  DESTINATION lib/${PROJECT_NAME})
+
+install(DIRECTORY pddl
+  DESTINATION share/${PROJECT_NAME})
 
 install(DIRECTORY launch
   DESTINATION share/${PROJECT_NAME})
@@ -51,5 +74,6 @@ if(BUILD_TESTING)
   set(ament_cmake_cpplint_FOUND TRUE)
   ament_lint_auto_find_test_dependencies()
 endif()
+
 
 ament_package()

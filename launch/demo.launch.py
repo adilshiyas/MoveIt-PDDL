@@ -37,7 +37,7 @@ def generate_launch_description():
     # Rviz
     rviz_config_file = (
         #get_package_share_directory("moveit2_tutorials") + "/launch/mtc.rviz"
-        get_package_share_directory("moveit_hanoi") + '/launch/hanoi.rviz'
+        get_package_share_directory("moveit_hanoi") + '/launch/hanoi_config.rviz'
     )
     rviz_node = Node(
         package="rviz2",
