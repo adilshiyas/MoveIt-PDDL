@@ -30,9 +30,9 @@ Robot Execution
 ## Requirements
 1. MoveIt 2
 
-You will need to underlay a MoveIt workspace. Check the MoveIt 2 documentation here.
+This package requires a working MoveIt 2 installation. Build and source a MoveIt workspace before building this package. See the MoveIt 2 installation guide for setup instructions.
 
-3. Trimesh
+2. Trimesh
 
 Used to generate the STL meshes for the Tower of Hanoi disks.
 ```text
@@ -40,11 +40,12 @@ pip install trimesh
 ```
 
 3. Fast Downward
+
 Used to solve the PDDL task planning problem. Installing from source is recommended. The path to your Fast Downward installation must be provided as a ROS parameter when running the planner.
 
 ## Usage
 
-### Generating Disk Meshes
+### 1. Generating Disk Meshes
 The package uses procedurally generated STL meshes for the Hanoi disks. Before building the package, generate meshes for the desired number of disks:
 
 ```text
@@ -53,27 +54,29 @@ python scripts/generate_disk_meshes.py --disks 4
 
 The generated meshes will be written to the ```meshes/``` directory.
 
-### Build the Workspace
+### 2. Build the Workspace
+
+This package is intended to be built as an overlay on top of a MoveIt 2 workspace. Make sure your MoveIt 2 workspace has been sourced before building.
 ```text
 colcon build
 source install/local_setup.bash
 ```
 
-### Launch MoveIt 2
+### 3. Launch MoveIt 2
 
 Start RViz, move_group, and the required controllers:
 ```text
 ros2 launch moveit_hanoi demo.launch.py
 ```
 
-### Launching the MTC Executor
+### 4. Launching the MTC Executor
 
 Start the MoveIt Task Constructor execution node:
 ```text
 ros2 launch moveit_hanoi hanoi_demo.launch.py
 ```
 
-### Generate a Task Plan
+### 5. Generate a Task Plan
 
 Run the PDDL planner, providing the path to your Fast Downward installation via the `fast_downward_path` ROS parameter.
 
