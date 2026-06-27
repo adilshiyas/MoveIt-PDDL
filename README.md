@@ -1,4 +1,4 @@
-# MoveIt-PDDL
+# MoveIt-PDDL: Task and Motion Planning in ROS 2
 
 A ROS 2 package demonstrating task and motion planning (TAMP) on a Franka Emika Panda manipulator. The robot solves the Tower of Hanoi puzzle by combining symbolic task planning with geometric motion planning.
 
