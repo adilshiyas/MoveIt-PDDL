@@ -26,3 +26,52 @@ IK & Motion Planning
     ↓
 Robot Execution
 ```
+
+## Requirements
+1. MoveIt 2
+You will need to underlay a MoveIt workspace. Check the MoveIt 2 documentation here.
+
+2. Trimesh
+Needed for disk mesh generation
+```text
+pip install trimesh
+```
+
+3. Fast Downward
+For solving PDDL problems. Check the documentation on how to install. Building from source is recommended. You will need to pass your Fast Downward directory as a ROS parameter later.
+
+## Usage
+
+### Generating Disk Meshes
+The package currently relies on running scripts/generate_disk_meshes.py to populate /meshes/ with .stl files. Generate meshes for any number of disks
+
+```text
+python scripts/generate_disk_meshes.py --disks 4
+```
+
+### Build and Run Launch Files
+
+Build and source workspace
+```text
+colcon build 
+source install/local_setup.bash
+```
+
+Launching RViz and MoveIt controllers
+```text
+ros2 launch moveit_hanoi demo.launch.py
+```
+
+Launching hanoi_mtc_executor
+```text
+ros2 launch moveit_hanoi hanoi_demo.launch.py
+```
+
+Run hanoi_planner node
+```text
+ros2 run moveit_hanoi hanoi_planner.py
+```
+
+
+
+
