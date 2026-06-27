@@ -30,7 +30,7 @@ Robot Execution
 ## Requirements
 1. MoveIt 2
 
-This package requires a working MoveIt 2 installation. Build and source a MoveIt workspace before building this package. See the MoveIt 2 installation guide for setup instructions.
+This package requires a working MoveIt 2 installation. Build and source a MoveIt workspace before building this package. See the [MoveIt 2 installation guide](https://moveit.picknik.ai/main/doc/tutorials/getting_started/getting_started.html#) for setup instructions.
 
 2. Trimesh
 
@@ -41,7 +41,7 @@ pip install trimesh
 
 3. Fast Downward
 
-Used to solve the PDDL task planning problem. Installing from source is recommended. The path to your Fast Downward installation must be provided as a ROS parameter when running the planner.
+Used to solve the PDDL task planning problem. [Installing from source is recommended](https://github.com/aibasel/downward). The path to your Fast Downward installation must be provided as a ROS parameter when running the planner.
 
 ## Usage
 
@@ -56,7 +56,7 @@ The generated meshes will be written to the ```meshes/``` directory.
 
 ### 2. Build the Workspace
 
-This package is intended to be built as an overlay on top of a MoveIt 2 workspace. Make sure your MoveIt 2 workspace has been sourced before building.
+Make sure your MoveIt 2 workspace has been sourced before building.
 ```text
 colcon build
 source install/local_setup.bash
