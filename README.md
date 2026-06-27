@@ -5,7 +5,7 @@ A ROS 2 package demonstrating task and motion planning (TAMP) on a Franka Emika 
 The symbolic planning problem is modeled in PDDL and solved using Fast Downward. Each action is then executed using MoveIt 2 and the MoveIt Task Constructor (MTC), which computes inverse kinematics, collision-free motion plans, and gripper actions.
 
 <p align="center">
-    <img src="doc/hanoi3_gif.gif" width="990"/>    
+    <img src="doc/hanoi3_gif.gif" width="700"/>    
 </p>
 
 ## Package Overview
