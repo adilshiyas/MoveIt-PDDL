@@ -1,0 +1,6 @@
+int32 disk
+int32 target_peg
+bool go_home_after
+---
+bool success
+string message
