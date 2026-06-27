@@ -11,6 +11,18 @@ This repository contains two primary ROS nodes:
 - **hanoi_planner** – Generates a symbolic task plan by invoking the Fast Downward PDDL planner.
 - **hanoi_mtc_executor** – Converts each symbolic action into a MoveIt Task Constructor task, computes IK and collision-free motion plans, and executes the resulting trajectory.
 
-<pre>
-PDDL Problem → Fast Downward → Symbolic Plan → MoveIt Task Constructor → IK & Motion Planning → Robot Execution
-</pre>
+## Pipeline
+
+```text
+PDDL Problem
+    ↓
+Fast Downward
+    ↓
+Symbolic Plan
+    ↓
+MoveIt Task Constructor
+    ↓
+IK & Motion Planning
+    ↓
+Robot Execution
+```
