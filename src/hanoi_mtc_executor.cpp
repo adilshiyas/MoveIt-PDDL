@@ -492,7 +492,7 @@ mtc::Task HanoiTaskNode::createTask(int disk, int source_peg, int target_peg, bo
   auto cartesian_planner = std::make_shared<mtc::solvers::CartesianPath>();
   cartesian_planner->setMaxVelocityScalingFactor(1.0);
   cartesian_planner->setMaxAccelerationScalingFactor(1.0);
-  cartesian_planner->setStepSize(0.0025);
+  cartesian_planner->setStepSize(0.03);
 
   auto stage_open_hand = 
     std::make_unique<mtc::stages::MoveTo>("open hand", interpolation_planner);
